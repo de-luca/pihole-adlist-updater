@@ -1,0 +1,24 @@
+version: '2.2'
+
+services:
+
+  pihole:
+    image: pihole/pihole:latest
+    init: true
+    volumes:
+      - db:/etc/pihole:rw
+    environment:
+      T: America/Chicago
+      VIRTUAL_HOST: pi.hole
+      PROXY_LOCATION: pi.hole
+      ServerIP: 127.0.0.1
+    
+  go:
+    image: golang:alpine
+    init: true
+    volumes:
+      - db:/pihole:rw
+      - ./:/scripts:rw
+
+volumes:
+  db:
