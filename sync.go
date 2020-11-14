@@ -1,8 +1,10 @@
 package main
 
 import (
+    "log"
     "database/sql"
     "fmt"
+    "os"
     "net/http"
     "encoding/csv"
     _ "github.com/mattn/go-sqlite3"
@@ -19,7 +21,6 @@ type Host struct {
 func (h Host) Comment() string {
     return fmt.Sprintf("[%s][%s] %s", h.Ticktype, h.Category, h.Description)
 }
-
 
 type Group struct {
     Name string
@@ -39,6 +40,21 @@ var listGroups = [...]Group{
         Name: "cross",
         Desc: "Dangerous, false postives, deprecated, biased",
     },
+}
+
+func rollbackAndQuit(tx *sql.Tx, err error) {
+    log.Fatal(err)
+    tx.Rollback()
+    log.Printf("ROLLBACK TRANSACTION")
+    os.Exit(1)
+}
+
+func logOrDie(function func(*sql.Tx) (int64, error), tx *sql.Tx, format string) {
+    output, err := function(tx)
+    if err != nil {
+        rollbackAndQuit(tx, err)
+    }
+    log.Printf(format, output)
 }
 
 
@@ -71,7 +87,7 @@ func fetchHosts() ([]Host, error) {
     return hosts, nil
 }
 
-func makeTmpTable(tx *sql.Tx, hosts []Host) {
+func makeTmpTable(tx *sql.Tx, hosts []Host) (error) {
     tmpStmt := `
     CREATE TEMPORARY TABLE tmp_adlist (
         address text,
@@ -81,24 +97,27 @@ func makeTmpTable(tx *sql.Tx, hosts []Host) {
     `
     _, err := tx.Exec(tmpStmt)
     if err != nil {
-        panic(err)
+        return err
     }
 
     stmt, err := tx.Prepare("INSERT INTO tmp_adlist values(?, ?, ?)");
     if err != nil {
-        panic(err)
+        return err
     }
     defer stmt.Close()
+
     for _, host := range hosts {
         _, err = stmt.Exec(host.SourceURL, true, host.Comment())
         if err != nil {
-            panic(err)
+            return err
         }
     }
+
+    return nil
 }
 
-func addMissing(tx *sql.Tx) {
-    missingStmt := `
+func addMissing(tx *sql.Tx) (int64, error) {
+    res, err := tx.Exec(`
     WITH missing AS (
         SELECT address, enabled, comment FROM tmp_adlist
         EXCEPT
@@ -106,16 +125,17 @@ func addMissing(tx *sql.Tx) {
     )
     INSERT OR IGNORE INTO adlist (address, enabled, comment)
     SELECT * FROM missing;
-    `
+    `)
 
-    _, err := tx.Exec(missingStmt)
     if err != nil {
-        panic(err)
+        return 0, err
     }
+
+    return res.RowsAffected()
 }
 
-func removeExtraneous(tx *sql.Tx) {
-    extraStmt := `
+func removeExtraneous(tx *sql.Tx) (int64, error) {
+    res, err := tx.Exec(`
     WITH extraneous AS (
         SELECT address, enabled, comment FROM adlist WHERE enabled AND comment LIKE '[%'
         EXCEPT
@@ -125,71 +145,91 @@ func removeExtraneous(tx *sql.Tx) {
     SET enabled = false
     FROM extraneous
     WHERE adlist.address = extraneous.address;
-    `
+    `)
 
-    _, err := tx.Exec(extraStmt)
     if err != nil {
-        panic(err)
+        return 0, err
     }
+
+    return res.RowsAffected()
 }
 
-
-func remapGroups(tx *sql.Tx) {
+func remapGroups(tx *sql.Tx) (int64, error) {
     _, err := tx.Exec(`
     DELETE FROM adlist_by_group 
     WHERE adlist_id IN (
         SELECT id FROM adlist WHERE comment LIKE '[%'
     );
     `)
+    if err != nil {
+        return 0, err
+    }
 
-    insertStmt, _ := tx.Prepare(`
+    insertStmt, err := tx.Prepare(`
     INSERT OR IGNORE INTO 'group' (enabled, name, description)
     VALUES (?, ?, ?)
     `);
+    if err != nil {
+        return 0, err
+    }
     defer insertStmt.Close()
 
     for _, group := range listGroups {
         _, err := insertStmt.Exec(true, group.Name, group.Desc)
         if err != nil {
-            panic(err)
+            return 0, err
         }
     }
 
-    mapStmt := `
+    res, err := tx.Exec(`
     INSERT OR IGNORE INTO adlist_by_group
     SELECT a.id, g.id
     FROM 'group' g
     JOIN adlist a ON a.comment LIKE '[' || g.name || '%'
     WHERE g.id != 0
-    `
+    `)
 
-    _, err = tx.Exec(mapStmt)
     if err != nil {
-        panic(err)
+        return 0, err
     }
+
+    return res.RowsAffected()
 }
 
 
 func main() {
     db, err := sql.Open("sqlite3", "/pihole/gravity.db")
     if err != nil {
-        panic(err)
+        log.Fatal(err)
+        os.Exit(1)
     }
     defer db.Close()
-    tx, err := db.Begin()
-    if err != nil {
-        panic(err)
-    }
+    log.Printf("Gravity database opened")
 
+    log.Printf("Fetching adlists from firebog")
     hosts, err := fetchHosts()
     if err != nil {
-        panic(err)
+        log.Fatal(err)
+        os.Exit(1)
+    }
+    log.Printf("Fetched %d adlist(s) from firebog", len(hosts))
+
+    log.Printf("BEGIN TRANSACTION")
+    tx, err := db.Begin()
+    if err != nil {
+        log.Fatal(err)
+        os.Exit(1)
     }
 
-    makeTmpTable(tx, hosts)
-    addMissing(tx)
-    removeExtraneous(tx)
-    remapGroups(tx)
+    err = makeTmpTable(tx, hosts)
+    if err != nil {
+        rollbackAndQuit(tx, err)
+    }
+
+    logOrDie(addMissing, tx, "Added %d missing adlist(s)")
+    logOrDie(removeExtraneous, tx, "Removed %d extraneous adlist(s)")
+    logOrDie(remapGroups, tx, "Inserted %d adlist/group mapping(s)")
     
     tx.Commit()
+    log.Printf("COMMIT TRANSACTION")
 }
