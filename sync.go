@@ -1,12 +1,13 @@
 package main
 
 import (
-    "log"
     "database/sql"
-    "fmt"
-    "os"
-    "net/http"
     "encoding/csv"
+    "flag"
+    "fmt"
+    "log"
+    "net/http"
+    "os"
     _ "github.com/mattn/go-sqlite3"
 )
 
@@ -198,13 +199,23 @@ func remapGroups(tx *sql.Tx) (int64, error) {
 
 
 func main() {
-    db, err := sql.Open("sqlite3", "/pihole/gravity.db")
+    dbFile := flag.String("db", "/etc/pihole/gravity.db", "The gravity.db file path")
+    flag.Parse()
+
+    db, err := sql.Open("sqlite3", *dbFile)
     if err != nil {
         log.Fatal(err)
         os.Exit(1)
     }
     defer db.Close()
-    log.Printf("Gravity database opened")
+    log.Printf("Gravity database in %s opened", *dbFile)
+
+    tx, err := db.Begin()
+    if err != nil {
+        log.Fatal(err)
+        os.Exit(1)
+    }
+    log.Printf("BEGIN TRANSACTION")
 
     log.Printf("Fetching adlists from firebog")
     hosts, err := fetchHosts()
@@ -213,13 +224,6 @@ func main() {
         os.Exit(1)
     }
     log.Printf("Fetched %d adlist(s) from firebog", len(hosts))
-
-    log.Printf("BEGIN TRANSACTION")
-    tx, err := db.Begin()
-    if err != nil {
-        log.Fatal(err)
-        os.Exit(1)
-    }
 
     err = makeTmpTable(tx, hosts)
     if err != nil {
