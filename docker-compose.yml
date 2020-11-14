@@ -5,6 +5,8 @@ services:
   pihole:
     image: pihole/pihole:latest
     init: true
+    ports:
+      - 8888:80
     volumes:
       - db:/etc/pihole:rw
     environment:
@@ -16,6 +18,7 @@ services:
   go:
     image: golang:alpine
     init: true
+    working_dir: /scripts
     volumes:
       - db:/pihole:rw
       - ./:/scripts:rw

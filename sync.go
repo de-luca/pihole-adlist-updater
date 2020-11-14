@@ -20,6 +20,28 @@ func (h Host) Comment() string {
     return fmt.Sprintf("[%s][%s] %s", h.Ticktype, h.Category, h.Description)
 }
 
+
+type Group struct {
+    Name string
+    Desc string
+}
+
+var listGroups = [...]Group{
+    Group{
+        Name: "tick",
+        Desc: "Safe, least likely to interfere with browsing",
+    },
+    Group{
+        Name: "std",
+        Desc: "Standard",
+    },
+    Group{
+        Name: "cross",
+        Desc: "Dangerous, false postives, deprecated, biased",
+    },
+}
+
+
 func fetchHosts() ([]Host, error) {
     res, err := http.Get("https://v.firebog.net/hosts/csv.txt")
     if err != nil {
@@ -112,6 +134,42 @@ func removeExtraneous(tx *sql.Tx) {
 }
 
 
+func remapGroups(tx *sql.Tx) {
+    _, err := tx.Exec(`
+    DELETE FROM adlist_by_group 
+    WHERE adlist_id IN (
+        SELECT id FROM adlist WHERE comment LIKE '[%'
+    );
+    `)
+
+    insertStmt, _ := tx.Prepare(`
+    INSERT OR IGNORE INTO 'group' (enabled, name, description)
+    VALUES (?, ?, ?)
+    `);
+    defer insertStmt.Close()
+
+    for _, group := range listGroups {
+        _, err := insertStmt.Exec(true, group.Name, group.Desc)
+        if err != nil {
+            panic(err)
+        }
+    }
+
+    mapStmt := `
+    INSERT OR IGNORE INTO adlist_by_group
+    SELECT a.id, g.id
+    FROM 'group' g
+    JOIN adlist a ON a.comment LIKE '[' || g.name || '%'
+    WHERE g.id != 0
+    `
+
+    _, err = tx.Exec(mapStmt)
+    if err != nil {
+        panic(err)
+    }
+}
+
+
 func main() {
     db, err := sql.Open("sqlite3", "/pihole/gravity.db")
     if err != nil {
@@ -131,23 +189,7 @@ func main() {
     makeTmpTable(tx, hosts)
     addMissing(tx)
     removeExtraneous(tx)
+    remapGroups(tx)
     
     tx.Commit()
-
-
-    // rows, err := db.Query("SELECT * FROM adlist WHERE comment LIKE '[%'")
-    // if err != nil {
-    // 	panic(err)
-    // }
-    // defer rows.Close()
-    // for rows.Next() {
-    // 	var id int
-    // 	var address string
-    // 	err = rows.Scan(&id, &address)
-    // 	if err != nil {
-    // 		panic(err)
-    // 	}
-    // 	fmt.Println(id, address)
-    // }
-    // err = rows.Err()
 }
