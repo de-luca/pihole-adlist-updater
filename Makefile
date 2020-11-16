@@ -7,5 +7,8 @@ dist/pihole-sync:
 		-tags sqlite_omit_load_extension \
 		pihole-sync.go
 
+fmt:
+	gofmt -s -w pihole-sync.go
+
 clean:
 	rm -rf ./dist
