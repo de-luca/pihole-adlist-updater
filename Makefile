@@ -1,14 +1,20 @@
-all: dist/pihole-sync
+all: dist/pihole-adlist-updater
 
-dist/pihole-sync:
+dist/pihole-adlist-updater:
 	go build \
-		-o=./dist/pihole-sync\
+		-o=./dist/pihole-adlist-updater\
 		-ldflags="-extldflags=-static" \
 		-tags sqlite_omit_load_extension \
-		pihole-sync.go
+		pihole-adlist-updater.go
 
 fmt:
-	gofmt -s -w pihole-sync.go
+	gofmt -s -w pihole-adlist-updater.go
+
+lint:
+	golint pihole-adlist-updater.go
 
 clean:
 	rm -rf ./dist
+
+tools:
+	go get -u golang.org/x/lint/golint

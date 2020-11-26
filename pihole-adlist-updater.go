@@ -11,7 +11,7 @@ import (
 	"os"
 )
 
-type Host struct {
+type adList struct {
 	Category    string
 	Ticktype    string
 	SourceRepo  string
@@ -19,16 +19,16 @@ type Host struct {
 	SourceURL   string
 }
 
-func (h Host) Comment() string {
-	return fmt.Sprintf("[%s][%s] %s", h.Ticktype, h.Category, h.Description)
+func (l adList) Comment() string {
+	return fmt.Sprintf("[%s][%s] %s", l.Ticktype, l.Category, l.Description)
 }
 
-type Group struct {
+type group struct {
 	Name string
 	Desc string
 }
 
-var listGroups = [...]Group{
+var listGroups = [...]group{
 	{
 		Name: "tick",
 		Desc: "Safe, least likely to interfere with browsing",
@@ -58,7 +58,7 @@ func logOrDie(function func(*sql.Tx) (int64, error), tx *sql.Tx, format string) 
 	log.Printf(format, output)
 }
 
-func fetchHosts() ([]Host, error) {
+func fetchAdLists() ([]adList, error) {
 	res, err := http.Get("https://v.firebog.net/hosts/csv.txt")
 	if err != nil {
 		return nil, err
@@ -73,9 +73,9 @@ func fetchHosts() ([]Host, error) {
 		return nil, err
 	}
 
-	var hosts []Host
+	var lists []adList
 	for _, line := range lines {
-		hosts = append(hosts, Host{
+		lists = append(lists, adList{
 			Category:    line[0],
 			Ticktype:    line[1],
 			SourceRepo:  line[2],
@@ -84,10 +84,10 @@ func fetchHosts() ([]Host, error) {
 		})
 	}
 
-	return hosts, nil
+	return lists, nil
 }
 
-func makeTmpTable(tx *sql.Tx, hosts []Host) error {
+func makeTmpTable(tx *sql.Tx, lists []adList) error {
 	tmpStmt := `
     CREATE TEMPORARY TABLE tmp_adlist (
         address text,
@@ -106,8 +106,8 @@ func makeTmpTable(tx *sql.Tx, hosts []Host) error {
 	}
 	defer stmt.Close()
 
-	for _, host := range hosts {
-		_, err = stmt.Exec(host.SourceURL, true, host.Comment())
+	for _, list := range lists {
+		_, err = stmt.Exec(list.SourceURL, true, list.Comment())
 		if err != nil {
 			return err
 		}
@@ -216,14 +216,14 @@ func main() {
 	log.Printf("BEGIN TRANSACTION")
 
 	log.Printf("Fetching adlists from firebog")
-	hosts, err := fetchHosts()
+	lists, err := fetchAdLists()
 	if err != nil {
 		log.Fatal(err)
 		os.Exit(1)
 	}
-	log.Printf("Fetched %d adlist(s) from firebog", len(hosts))
+	log.Printf("Fetched %d adlist(s) from firebog", len(lists))
 
-	err = makeTmpTable(tx, hosts)
+	err = makeTmpTable(tx, lists)
 	if err != nil {
 		rollbackAndQuit(tx, err)
 	}

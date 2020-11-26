@@ -18,6 +18,8 @@ services:
   go:
     image: golang:alpine
     init: true
+    depends_on:
+      - pihole
     working_dir: /scripts
     volumes:
       - db:/pihole:rw
